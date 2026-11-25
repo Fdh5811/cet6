@@ -35,6 +35,13 @@
   button:hover{border-color:var(--accent);color:var(--accent);}
   #count{color:var(--sub);font-size:13px;margin-left:auto;white-space:nowrap;}
 
+  .jumpbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-2px 0 12px;}
+  .jumpbar button{padding:6px 11px;font-size:13px;}
+  #jump{width:112px;padding:6px 9px;border:1px solid #dcdfe5;border-radius:8px;
+        font-size:13px;outline:none;background:#fff;color:var(--text);font-family:inherit;}
+  #jump:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12);}
+  .pos-hint{font-size:12px;color:var(--sub);margin-left:auto;white-space:nowrap;}
+
   .thead,.vrow{display:flex;align-items:flex-start;}
   .thead{
     background:#eef1f6;color:#3b4252;font-size:13px;font-weight:600;
@@ -177,6 +184,14 @@
     <button id="syncBtn" title="把标红进度同步到手机（免费）">☁ 同步</button>
     <button id="collapseAll">全部收起</button>
     <span id="count"></span>
+  </div>
+
+  <div class="jumpbar">
+    <button id="prevGroup" title="往前跳 500 个词">↑ 上一组</button>
+    <button id="nextGroup" title="往后跳 500 个词">↓ 下一组</button>
+    <input id="jump" type="number" min="1" max="5523" placeholder="跳到序号…">
+    <button id="jumpGo">跳转</button>
+    <span class="pos-hint" id="posHint"></span>
   </div>
 
   <div class="thead">
@@ -414,6 +429,7 @@ var DATA = [{"i":1,"w":"ornament","p":"/ˈɔːrnəmənt/","m":"n. 装饰；[建]
     requestAnimationFrame(function(){
       rafPending = false;
       render(false);
+      scheduleSavePos();
     });
   }
   listEl.addEventListener('scroll', onScroll, {passive:true});
@@ -449,6 +465,90 @@ var DATA = [{"i":1,"w":"ornament","p":"/ˈɔːrnəmənt/","m":"n. 装饰；[建]
     rebuild();
     render(true);
   });
+
+  // ---- 阅读位置记忆 + 快速跳转 ----
+  var POS_KEY = 'cet6-pos-v1';
+  var posTimer = null;
+  var restoredSeq = 0;
+  var jumpEl  = document.getElementById('jump');
+  var posHint = document.getElementById('posHint');
+
+  // 当前屏幕顶端是第几个词
+  function currentSeq(){
+    var idx = lowerBound(Math.max(0, listEl.scrollTop));
+    if (idx >= items.length) idx = items.length - 1;
+    return items[idx] ? items[idx].i : 1;
+  }
+
+  function savePosNow(){
+    if (items !== DATA) return;      // 搜索过滤时不记录
+    try{ localStorage.setItem(POS_KEY, String(currentSeq())); }catch(e){}
+  }
+
+  function updatePosHint(){
+    posHint.textContent = restoredSeq
+      ? '已回到上次位置：序号 ' + restoredSeq
+      : '当前位置：序号 ' + currentSeq();
+  }
+
+  function scheduleSavePos(){
+    clearTimeout(posTimer);
+    posTimer = setTimeout(function(){
+      savePosNow();
+      updatePosHint();
+    }, 400);
+  }
+
+  function jumpToSeq(n){
+    n = Math.floor(+n);
+    if (!(n >= 1)) return;
+    if (n > DATA.length) n = DATA.length;
+    if (items !== DATA){
+      searchEl.value = '';
+      items = DATA;
+      rebuild();
+    }
+    var idx = (DATA[n - 1] && DATA[n - 1].i === n) ? n - 1 : 0;
+    restoredSeq = 0;
+    renderedStart = renderedEnd = -1;
+    listEl.scrollTop = tops[idx];
+    render(true);
+    updateCount();
+    posHint.textContent = '当前位置：序号 ' + n;
+    savePosNow();
+  }
+
+  // 按 500 词一组前后翻
+  function stepGroup(dir){
+    var g = Math.floor((currentSeq() - 1) / 500);
+    var t = (g + dir) * 500 + 1;
+    if (t < 1) t = 1;
+    jumpToSeq(t);
+  }
+
+  document.getElementById('prevGroup').addEventListener('click', function(){ stepGroup(-1); });
+  document.getElementById('nextGroup').addEventListener('click', function(){ stepGroup(1); });
+  document.getElementById('jumpGo').addEventListener('click', function(){
+    jumpToSeq(jumpEl.value);
+    jumpEl.value = '';
+  });
+  jumpEl.addEventListener('keydown', function(ev){
+    if (ev.key === 'Enter'){
+      jumpToSeq(jumpEl.value);
+      jumpEl.value = '';
+    }
+  });
+
+  // 打开时回到上次读到的位置
+  function restorePos(){
+    var wi = +(localStorage.getItem(POS_KEY) || 0) || 0;
+    if (wi <= 1 || wi > DATA.length) return 0;
+    var idx = wi - 1;
+    if (!DATA[idx] || DATA[idx].i !== wi) return 0;
+    listEl.scrollTop = tops[idx];
+    render(true);
+    return wi;
+  }
 
   window.addEventListener('resize', function(){
     renderedStart = renderedEnd = -1;
@@ -867,6 +967,16 @@ var DATA = [{"i":1,"w":"ornament","p":"/ˈɔːrnəmənt/","m":"n. 装饰；[建]
     if (syncCfg && syncCfg.token && syncCfg.gistId){
       setSyncBtn('busy', '同步中…');
       pullFromCloud();
+    }
+
+    var restored = restorePos();
+    if (restored){
+      restoredSeq = restored;
+      posHint.textContent = '已回到上次位置：序号 ' + restored;
+      setTimeout(function(){
+        restoredSeq = 0;
+        updatePosHint();
+      }, 4000);
     }
   })();
 })();
